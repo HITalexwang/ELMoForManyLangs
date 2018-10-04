@@ -303,6 +303,8 @@ def test_main():
   cmd.add_argument("--input", help="the path to the raw text file.")
   cmd.add_argument('--output_ave', help='the path to the average embedding file.')
   cmd.add_argument('--output_lstm', help='the path to the 1st lstm-output embedding file.')
+  cmd.add_argument('--output_dir', help='the path to the output directory.')
+  cmd.add_argument('--output_layer', default=-1, type=int, help='Output layer (-1 for none, 0 for CNN layer, 1/2 for LSTM layer 1/2')
 
   cmd.add_argument("--model", required=True, help="path to save model")
   cmd.add_argument("--batch_size", "--batch", type=int, default=1, help='the batch size.')
@@ -387,6 +389,15 @@ def test_main():
 
   fout_ave = h5py.File(args.output_ave, 'w') if args.output_ave is not None else None
   fout_lstm = h5py.File(args.output_lstm, 'w') if args.output_lstm is not None else None
+  #print ("Output layer:{}".format(args.output_layer))
+  if args.output_layer != -1:
+    if args.output_dir is None:
+      raise ValueError("output_dir should be given for output_layer {}".format(args.output_layer))
+    _, input_name = os.path.split(args.input)
+    output_name = input_name + '.elmo.layer'+str(args.output_layer)
+    output_layer = os.path.join(args.output_dir,output_name)
+  print ("Output layer filename:{}".format(output_layer))
+  fout_layer = h5py.File(output_layer, 'w') if args.output_layer is not -1 else None
 
   for w, c, lens, masks, texts in zip(test_w, test_c, test_lens, test_masks, test_text):
     output = model.forward(w, c, masks)
@@ -421,6 +432,13 @@ def test_main():
           data_lstm.shape, dtype='float32',
           data=data_lstm
         )
+      if fout_layer is not None:
+        data_layer = data[args.output_layer]
+        fout_layer.create_dataset(
+          sent,
+          data_layer.shape, dtype='float32',
+          data=data_layer
+        )
       cnt += 1
       if cnt % 1000 == 0:
         logging.info('Finished {0} sentences.'.format(cnt))
@@ -428,6 +446,8 @@ def test_main():
     fout_ave.close()
   if fout_lstm is not None:
     fout_lstm.close()
+  if fout_layer is not None:
+    fout_layer.close()
 
 
 if __name__ == "__main__":
