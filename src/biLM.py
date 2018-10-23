@@ -240,9 +240,9 @@ class Model(nn.Module):
     """
     classifier_name = self.config['classifier']['name'].lower()
 
-    if self.training and classifier_name == 'cnn_softmax' or classifier_name == 'sampled_softmax':
-      self.classify_layer.update_negative_samples(word_inp, chars_inp, mask_package[0])
-      self.classify_layer.update_embedding_matrix()
+    #if self.training and classifier_name == 'cnn_softmax' or classifier_name == 'sampled_softmax':
+    #  self.classify_layer.update_negative_samples(word_inp, chars_inp, mask_package[0])
+    #  self.classify_layer.update_embedding_matrix()
 
     token_embedding = self.token_embedder(word_inp, chars_inp, (mask_package[0].size(0), mask_package[0].size(1)))
     token_embedding = F.dropout(token_embedding, self.config['dropout'], self.training)
@@ -337,8 +337,12 @@ def train_model(epoch, opt, model, parallel_model, optimizer,
   train_c = [train_c[l] for l in lst]
   train_lens = [train_lens[l] for l in lst]
   train_masks = [train_masks[l] for l in lst]
+  classifier_name = model.config['classifier']['name'].lower()
 
   for w, c, lens, masks in zip(train_w, train_c, train_lens, train_masks):
+    if classifier_name == 'cnn_softmax' or classifier_name == 'sampled_softmax':
+      model.classify_layer.update_negative_samples(w, c, masks[0])
+      model.classify_layer.update_embedding_matrix()
     cnt += 1
     model.zero_grad()
     #loss_forward, loss_backward = model.forward(w, c, masks)
