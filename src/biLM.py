@@ -305,7 +305,7 @@ def eval_model(model, valid):
   return np.exp(total_loss / total_tag)
 
 
-def train_model(epoch, opt, model, optimizer,
+def train_model(epoch, opt, model, parallel_model, optimizer,
                 train, valid, test, best_train, best_valid, test_result):
   """
   Training model for one epoch
@@ -341,10 +341,14 @@ def train_model(epoch, opt, model, optimizer,
   for w, c, lens, masks in zip(train_w, train_c, train_lens, train_masks):
     cnt += 1
     model.zero_grad()
-    loss_forward, loss_backward = model.forward(w, c, masks)
+    #loss_forward, loss_backward = model.forward(w, c, masks)
+    loss_forward, loss_backward = parallel_model.forward(w, c, masks)
 
+    #loss = (loss_forward + loss_backward) / 2.0
+    #total_loss += loss_forward.data[0]
+    loss_forward, loss_backward = loss_forward.sum(-1), loss_backward.sum(-1)
     loss = (loss_forward + loss_backward) / 2.0
-    total_loss += loss_forward.data[0]
+    total_loss += loss_forward.item()
     n_tags = sum(lens)
     total_tag += n_tags
     loss.backward()
@@ -410,7 +414,8 @@ def get_truncated_vocab(dataset, min_count):
 def train():
   cmd = argparse.ArgumentParser(sys.argv[0], conflict_handler='resolve')
   cmd.add_argument('--seed', default=1, type=int, help='The random seed.')
-  cmd.add_argument('--gpu', default=-1, type=int, help='Use id of gpu, -1 if cpu.')
+  #cmd.add_argument('--gpu', default=-1, type=int, help='Use id of gpu, -1 if cpu.')
+  cmd.add_argument("--gpu", type=str, help="The ids of gpu, None if cpu.")
 
   cmd.add_argument('--train_path', required=True, help='The path to the training file.')
   cmd.add_argument('--valid_path', help='The path to the development file.')
@@ -455,12 +460,23 @@ def train():
   # set seed.
   torch.manual_seed(opt.seed)
   random.seed(opt.seed)
-  if opt.gpu >= 0:
-    torch.cuda.set_device(opt.gpu)
-    if opt.seed > 0:
-      torch.cuda.manual_seed(opt.seed)
 
-  use_cuda = opt.gpu >= 0 and torch.cuda.is_available()
+  #if opt.gpu >= 0:
+  #  torch.cuda.set_device(opt.gpu)
+  #  if opt.seed > 0:
+  #    torch.cuda.manual_seed(opt.seed)
+
+  #use_cuda = opt.gpu >= 0 and torch.cuda.is_available()
+
+  gpu_ids = None
+
+  if args.gpu is not None:
+    gpu_ids = [int(x) for x in args.gpu.split(",")]
+    torch.cuda.set_device(gpu_ids[0])
+    if args.seed > 0:
+      torch.cuda.manual_seed(args.seed)
+
+  use_cuda = gpu_ids is not None and torch.cuda.is_available()
 
   token_embedder_name = config['token_embedder']['name'].lower()
   token_embedder_max_chars = config['token_embedder'].get('max_characters_per_token', None)
@@ -583,6 +599,9 @@ def train():
   logging.info(str(model))
   if use_cuda:
     model = model.cuda()
+    parallel_model = nn.DataParallel(model, device_ids=gpu_ids)
+  else:
+    parallel_model = model
 
   need_grad = lambda x: x.requires_grad
   if opt.optimizer.lower() == 'adam':
@@ -616,7 +635,7 @@ def train():
   test_result = 1e+8
 
   for epoch in range(opt.max_epoch):
-    best_train, best_valid, test_result = train_model(epoch, opt, model, optimizer,
+    best_train, best_valid, test_result = train_model(epoch, opt, model, parallel_model, optimizer,
                                                       train, valid, test, best_train, best_valid, test_result)
     if opt.lr_decay > 0:
       optimizer.param_groups[0]['lr'] *= opt.lr_decay
