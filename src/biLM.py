@@ -474,11 +474,12 @@ def train():
 
   gpu_ids = None
 
-  if args.gpu is not None:
-    gpu_ids = [int(x) for x in args.gpu.split(",")]
+  if opt.gpu is not None:
+    gpu_ids = [int(x) for x in opt.gpu.split(",")]
+    print ('Using GPUs: {}'.format(opt.gpu))
     torch.cuda.set_device(gpu_ids[0])
-    if args.seed > 0:
-      torch.cuda.manual_seed(args.seed)
+    if opt.seed > 0:
+      torch.cuda.manual_seed(opt.seed)
 
   use_cuda = gpu_ids is not None and torch.cuda.is_available()
 
