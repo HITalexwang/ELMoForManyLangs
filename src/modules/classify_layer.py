@@ -64,6 +64,9 @@ class SampledSoftmaxLayer(nn.Module):
     self.oov_column.data.uniform_(-0.25, 0.25)
 
   def forward(self, x, y):
+    if self.use_cuda:
+      self.columns = self.columns.cuda()
+    embedding_matrix = self.column_emb.forward(self.columns).transpose(0, 1)
     if self.training:
       for i in range(y.size(0)):
         y[i] = self.word_to_column.get(y[i].tolist())
@@ -80,28 +83,24 @@ class SampledSoftmaxLayer(nn.Module):
     if self.use_cuda:
       samples = samples.cuda()
 
-    tag_scores = (x.matmul(self.embedding_matrix)).view(y.size(0), -1) + \
+    tag_scores = (x.matmul(embedding_matrix)).view(y.size(0), -1) + \
                  (self.column_bias.forward(samples)).view(1, -1) 
     return self.criterion(tag_scores, y)
 
   def update_embedding_matrix(self):
     word_inp, chars_inp = [], []
     if self.training:  
-      columns = torch.LongTensor(len(self.negative_samples) + 1)
+      self.columns = torch.LongTensor(len(self.negative_samples) + 1)
       samples = self.negative_samples
       for i, word in enumerate(samples):
-        columns[self.word_to_column[word]] = word
-      columns[0] = 0
+        self.columns[self.word_to_column[word]] = word
+      self.columns[0] = 0
     else:
-      columns = torch.LongTensor(len(self.all_word) + 1)
+      self.columns = torch.LongTensor(len(self.all_word) + 1)
       samples = self.all_word
       for i, word in enumerate(samples):
-        columns[self.all_word_to_column[word]] = word
-      columns[0] = 0
-
-    if self.use_cuda:
-      columns = columns.cuda()
-    self.embedding_matrix = self.column_emb.forward(columns).transpose(0, 1)
+        self.columns[self.all_word_to_column[word]] = word
+      self.columns[0] = 0
 
   def update_negative_samples(self, word_inp, chars_inp, mask):
     batch_size, seq_len = word_inp.size(0), word_inp.size(1)
@@ -237,3 +236,4 @@ class CNNSoftmaxLayer(nn.Module):
               self.negative_samples = self.negative_samples[1:] + [self.negative_samples[0]]
             self.word_to_column[package[0]] = self.word_to_column.pop(self.negative_samples[0][0])
             self.negative_samples = self.negative_samples[1:] + [package]
+

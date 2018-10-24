@@ -137,23 +137,13 @@ def create_one_batch(x, word2id, char2id, config, oov='<oov>', pad='<pad>', sort
   else:
     batch_c = None
 
-  masks = [torch.LongTensor(batch_size, max_len).fill_(0), [], []]
+  mask = torch.ByteTensor(batch_size, max_len).fill_(0)
 
   for i, x_i in enumerate(x):
     for j in range(len(x_i)):
-      masks[0][i][j] = 1
-      if j + 1 < len(x_i):
-        masks[1].append(i * max_len + j)
-      if j > 0: 
-        masks[2].append(i * max_len + j)
+      mask[i][j] = 1
 
-  assert len(masks[1]) <= batch_size * max_len
-  assert len(masks[2]) <= batch_size * max_len
-
-  masks[1] = torch.LongTensor(masks[1])
-  masks[2] = torch.LongTensor(masks[2])
-
-  return batch_w, batch_c, lens, masks
+  return batch_w, batch_c, lens, mask
 
 
 # shuffle training examples and create mini-batches
@@ -230,7 +220,7 @@ class Model(nn.Module):
     elif config['classifier']['name'].lower() == 'sampled_softmax':
       self.classify_layer = SampledSoftmaxLayer(self.output_dim, n_class, config['classifier']['n_samples'], use_cuda)
 
-  def forward(self, word_inp, chars_inp, mask_package):
+  def forward(self, word_inp, chars_inp, mask):
     """
 
     :param word_inp:
@@ -244,12 +234,12 @@ class Model(nn.Module):
     #  self.classify_layer.update_negative_samples(word_inp, chars_inp, mask_package[0])
     #  self.classify_layer.update_embedding_matrix()
 
-    token_embedding = self.token_embedder(word_inp, chars_inp, (mask_package[0].size(0), mask_package[0].size(1)))
+    token_embedding = self.token_embedder(word_inp, chars_inp, (mask.size(0), mask.size(1)))
     token_embedding = F.dropout(token_embedding, self.config['dropout'], self.training)
 
     encoder_name = self.config['encoder']['name'].lower()
     if encoder_name == 'elmo':
-      mask = Variable(mask_package[0].cuda()).cuda() if self.use_cuda else Variable(mask_package[0])
+      mask = Variable(mask.cuda()).cuda() if self.use_cuda else Variable(mask)
       encoder_output = self.encoder(token_embedding, mask)
       encoder_output = encoder_output[1]
       # [batch_size, len, hidden_size]
@@ -260,21 +250,26 @@ class Model(nn.Module):
 
     encoder_output = F.dropout(encoder_output, self.config['dropout'], self.training)
     forward, backward = encoder_output.split(self.output_dim, 2)
-
+    
     word_inp = Variable(word_inp)
     if self.use_cuda:
       word_inp = word_inp.cuda()
 
-    mask1 = Variable(mask_package[1].cuda()).cuda() if self.use_cuda else Variable(mask_package[1])
-    mask2 = Variable(mask_package[2].cuda()).cuda() if self.use_cuda else Variable(mask_package[2])
+    batch_size, seq_len = mask.size(0), mask.size(1)
 
-    forward_x = forward.contiguous().view(-1, self.output_dim).index_select(0, mask1)
-    forward_y = word_inp.contiguous().view(-1).index_select(0, mask2)
+    lens = mask.long().sum(-1) - 1
+    mask1 = mask.clone()
+    mask1[:, 0] = 0
+    mask2 = mask.clone()
+    mask2.scatter_(1, lens.view(-1, 1), 0)
 
-    backward_x = backward.contiguous().view(-1, self.output_dim).index_select(0, mask2)
-    backward_y = word_inp.contiguous().view(-1).index_select(0, mask1)
+    forward_x = forward.masked_select(mask2.view(batch_size, seq_len, 1).expand(-1, -1, self.output_dim)).view(-1, self.output_dim)
+    forward_y = word_inp.masked_select(mask1)
 
-    return self.classify_layer(forward_x, forward_y), self.classify_layer(backward_x, backward_y)
+    backward_x = backward.masked_select(mask1.view(batch_size, seq_len, 1).expand(-1, -1, self.output_dim)).view(-1, self.output_dim)
+    backward_y = word_inp.masked_select(mask2)
+	  
+    return self.classify_layer(forward_x, forward_y).unsqueeze(0), self.classify_layer(backward_x, backward_y).unsqueeze(0)
 
   def save_model(self, path, save_classify_layer):
     torch.save(self.token_embedder.state_dict(), os.path.join(path, 'token_embedder.pkl'))    
@@ -341,7 +336,7 @@ def train_model(epoch, opt, model, parallel_model, optimizer,
 
   for w, c, lens, masks in zip(train_w, train_c, train_lens, train_masks):
     if classifier_name == 'cnn_softmax' or classifier_name == 'sampled_softmax':
-      model.classify_layer.update_negative_samples(w, c, masks[0])
+      model.classify_layer.update_negative_samples(w, c, masks)
       model.classify_layer.update_embedding_matrix()
     cnt += 1
     model.zero_grad()
